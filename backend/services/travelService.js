@@ -6,49 +6,62 @@ const BASE_URL = "https://api.opentripmap.com/0.1/en";
 const OTM_KEY = process.env.OPENTRIPMAP_KEY;
 const PEXELS_KEY = process.env.PEXELS_API_KEY;
 
-// 🧠 Simple in-memory cache for Pexels images to reduce API calls
+// 🧠 In-memory cache for Pexels images to reduce API calls
 const imageCache = new Map();
 
 /**
- * 🔹 Get city coordinates with fallback to OpenStreetMap
+ * 🌍 Get city coordinates using OpenTripMap → OpenStreetMap fallback
  */
 export const getCityCoordinates = async (city) => {
   try {
-    // 🗺️ Try OpenTripMap Geoname
-    const otmRes = await axios.get(`${BASE_URL}/places/geoname`, {
-      params: { name: city, apikey: OTM_KEY },
-    });
-
-    if (otmRes.data?.lat && otmRes.data?.lon) {
-      return { lat: otmRes.data.lat, lon: otmRes.data.lon };
+    if (!city || city.trim().length < 2) {
+      throw new Error("Invalid city name provided.");
     }
 
-    console.warn(`⚠️ OpenTripMap couldn't find "${city}". Falling back to OSM.`);
+    console.log(`📍 Fetching coordinates for: ${city}`);
 
-    // 🧭 Fallback: OpenStreetMap (Nominatim)
-    const osmRes = await axios.get("https://nominatim.openstreetmap.org/search", {
-      params: { q: city, format: "json", limit: 1 },
-    });
+    // 1️⃣ Try OpenTripMap Geoname
+    try {
+      const otmRes = await axios.get(`${BASE_URL}/places/geoname`, {
+        params: { name: city, apikey: OTM_KEY },
+      });
 
-    if (osmRes.data?.length) {
-      return { lat: osmRes.data[0].lat, lon: osmRes.data[0].lon };
+      if (otmRes.data?.lat && otmRes.data?.lon) {
+        console.log(`✅ Found via OpenTripMap: ${city}`);
+        return { lat: otmRes.data.lat, lon: otmRes.data.lon };
+      }
+    } catch (err) {
+      console.warn(`⚠️ OpenTripMap lookup failed for "${city}": ${err.message}`);
     }
 
-    throw new Error(`No coordinates found for city: ${city}`);
+    // 2️⃣ Fallback: OpenStreetMap (Nominatim)
+    try {
+      const osmRes = await axios.get("https://nominatim.openstreetmap.org/search", {
+        params: { q: city, format: "json", limit: 1 },
+      });
+
+      if (osmRes.data?.length) {
+        console.log(`✅ Found via OpenStreetMap: ${city}`);
+        return { lat: osmRes.data[0].lat, lon: osmRes.data[0].lon };
+      }
+    } catch (err) {
+      console.warn(`⚠️ OpenStreetMap lookup failed for "${city}": ${err.message}`);
+    }
+
+    // ❌ No valid city found
+    throw new Error(`⚠️ Could not find coordinates for "${city}".`);
   } catch (err) {
     console.error("❌ Error fetching city coordinates:", err.message);
-    // Safe fallback to Goa (so you never get undefined coords)
-    return { lat: 15.2993, lon: 74.124 };
+    throw new Error(`⚠️ Could not find coordinates for "${city}".`);
   }
 };
 
 /**
- * 🖼️ Fetch image from Pexels with caching & intelligent query
+ * 🖼️ Fetch image from Pexels with caching
  */
 const getImageFromPexels = async (query) => {
   if (!PEXELS_KEY || !query) return null;
 
-  // 🧠 Check cache first
   if (imageCache.has(query.toLowerCase())) {
     return imageCache.get(query.toLowerCase());
   }
@@ -59,21 +72,20 @@ const getImageFromPexels = async (query) => {
       params: { query, per_page: 1, orientation: "landscape" },
     });
 
-    const url = data.photos?.[0]?.src?.medium || null;
+    const url =
+      data.photos?.[0]?.src?.medium ||
+      "https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg";
 
-    if (url) {
-      imageCache.set(query.toLowerCase(), url); // cache it
-    }
-
+    imageCache.set(query.toLowerCase(), url);
     return url;
   } catch (err) {
-    console.warn("⚠️ Pexels fetch failed for:", query, "|", err.message);
-    return null;
+    console.warn(`⚠️ Pexels fetch failed for "${query}": ${err.message}`);
+    return "https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg";
   }
 };
 
 /**
- * 🏝️ Get detailed tourist attractions with high-quality images
+ * 🏝️ Get detailed tourist attractions with images and descriptions
  */
 export const getTouristAttractions = async (lat, lon, radius = 10000, limit = 10) => {
   try {
@@ -85,7 +97,7 @@ export const getTouristAttractions = async (lat, lon, radius = 10000, limit = 10
         limit,
         apikey: OTM_KEY,
         format: "json",
-        kinds: "interesting_places,tourist_facilities,cultural,beaches,natural",
+        kinds: "interesting_places,tourist_facilities,cultural,beaches,natural,architecture",
       },
     });
 
@@ -119,21 +131,18 @@ export const getTouristAttractions = async (lat, lon, radius = 10000, limit = 10
             photoUrl = null;
           }
 
-          // 2️⃣ If no photo, fetch from Pexels
+          // 2️⃣ Fallback: Pexels image
           if (!photoUrl) {
-            const searchQuery = `${place.name} ${place.kinds?.split(",")[0] || "tourist spot"}`;
-            const pexelsImage = await getImageFromPexels(searchQuery);
-            photoUrl =
-              pexelsImage ||
-              "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/No_image_available.svg/480px-No_image_available.svg.png";
+            const query = `${place.name} ${place.kinds?.split(",")[0] || "tourist spot"}`;
+            photoUrl = await getImageFromPexels(query);
           }
 
           // 3️⃣ Metadata
-          const costEstimate = Math.floor(200 + Math.random() * 800); // ₹200–₹1000
+          const costEstimate = Math.floor(200 + Math.random() * 800);
           const distance = place.dist ? `${(place.dist / 1000).toFixed(1)} km` : "N/A";
 
           return {
-            name: place.name || "Unknown Place",
+            name: place.name,
             description,
             distance,
             kinds: place.kinds?.split(",")[0] || "attraction",

@@ -10,11 +10,30 @@ export default function MessageBubble({ from = "user", text = "" }) {
     "![]($1)"
   );
 
+  // 🔊 Speak function for bot replies
+  const speakText = (message) => {
+    if (!window.speechSynthesis) {
+      alert("Speech synthesis not supported in this browser.");
+      return;
+    }
+
+    // Stop any ongoing speech
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = "en-IN"; // Indian English accent
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  };
+
   return (
     <div
       style={{
         display: "flex",
-        justifyContent: isUser ? "flex-end" : "flex-start",
+        flexDirection: "column",
+        alignItems: isUser ? "flex-end" : "flex-start",
         margin: "10px 0",
       }}
     >
@@ -30,13 +49,13 @@ export default function MessageBubble({ from = "user", text = "" }) {
             : "0 2px 8px rgba(0,0,0,0.1)",
           wordWrap: "break-word",
           overflow: "hidden",
+          position: "relative",
         }}
       >
         <ReactMarkdown
           components={{
-            // 🖼️ Render image directly (no <div> wrapping)
+            // 🖼️ Image rendering
             img: ({ node, ...props }) => {
-              // Avoid rendering broken or empty src
               if (!props.src) return null;
               return (
                 <img
@@ -100,6 +119,26 @@ export default function MessageBubble({ from = "user", text = "" }) {
         >
           {processedText}
         </ReactMarkdown>
+
+        {/* 🔊 Speak button for bot messages */}
+        {!isUser && (
+          <button
+            onClick={() => speakText(text)}
+            style={{
+              position: "absolute",
+              bottom: "6px",
+              right: "8px",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "#2563eb",
+              fontSize: "1.1rem",
+            }}
+            title="Speak reply"
+          >
+            🔊
+          </button>
+        )}
       </div>
     </div>
   );

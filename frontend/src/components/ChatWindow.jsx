@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import MessageBubble from "./MessageBubble.jsx";
 import Loader from "./Loader.jsx";
 import { chat, chatItinerary } from "../services/api.js";
@@ -12,11 +12,63 @@ export default function ChatWindow() {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+
+  const recognitionRef = useRef(null);
 
   // Booking state
   const [showBooking, setShowBooking] = useState(false);
   const [selectedHotel, setSelectedHotel] = useState(null);
   const [rooms, setRooms] = useState(1);
+
+  // 🎙️ Initialize Speech Recognition
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("Speech Recognition not supported in this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event) => {
+      const text = event.results[0][0].transcript;
+      setInput(text);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("Your browser doesn't support voice input.");
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current.stop();
+    } else {
+      recognitionRef.current.start();
+    }
+    setIsListening(!isListening);
+  };
+
+  // 🔊 Speak function (Text-to-Speech)
+  const speakText = (text) => {
+    if (!window.speechSynthesis) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-IN";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  };
 
   // 🧠 Handle Send Message
   const send = async () => {
@@ -27,7 +79,6 @@ export default function ChatWindow() {
     setLoading(true);
 
     try {
-      // Detect trip-related message
       const tripMatchFull = text.match(
         /trip\s+from\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\s+with\s+(\d+)\s*(?:rs|rupees|budget|inr)?)?$/i
       );
@@ -60,12 +111,14 @@ export default function ChatWindow() {
           payload = { destination: cleanDestination, durationDays: 3 };
         }
 
-        const data = await chatItinerary(payload,text);
+        const data = await chatItinerary(payload);
         const formatted = formatItinerary(data);
         setMessages((m) => [...m, { from: "bot", text: formatted, hotels: data }]);
+        speakText(`Here’s your trip plan to ${payload.destination}`);
       } else {
         const { reply } = await chat(text);
         setMessages((m) => [...m, { from: "bot", text: reply }]);
+        speakText(reply);
       }
     } catch (e) {
       console.error("Chat error:", e);
@@ -73,6 +126,7 @@ export default function ChatWindow() {
         ...m,
         { from: "bot", text: "⚠️ Oops! Something went wrong while planning your trip." },
       ]);
+      speakText("Oops, something went wrong while planning your trip.");
     } finally {
       setLoading(false);
     }
@@ -93,36 +147,25 @@ export default function ChatWindow() {
       total_estimated_cost,
     } = data;
 
-    let output = `🗺️ **${source ? `${source} → ` : ""}${destination} Trip Plan**\n\n`;
+    let output = `🗺️ ${source ? `${source} → ` : ""}${destination} Trip Plan\n\n`;
     if (summary) output += `✨ ${summary}\n\n`;
     if (durationDays) output += `📅 Duration: ${durationDays} days\n`;
     if (budget && budget > 0) output += `💰 Budget: ₹${budget}\n\n`;
 
     if (itinerary?.length) {
       itinerary.forEach((day) => {
-        output += `📅 **Day ${day.day}:**\n`;
+        output += `📅 Day ${day.day}:\n`;
         (day.plan || []).forEach((a) => (output += `   • ${a}\n`));
         if (day.hotel) {
-          output += `🏨 **Hotel:** ${day.hotel.name} (${day.hotel.rating}⭐)\n💰 ${day.hotel.price} — ${day.hotel.location}\n`;
-          if (day.hotel.image)
-            output += `![${day.hotel.name}](${day.hotel.image})\n\n`;
-          output += `[Book Now 🏷️](#book-${day.hotel.name.replace(/\s+/g, "-")})\n\n`;
+          output += `🏨 Hotel: ${day.hotel.name} (${day.hotel.rating}⭐)\n💰 ${day.hotel.price}\n\n`;
         }
-        output += "\n";
-      });
-    }
-
-    if (alternative_hotels?.length) {
-      output += "🏕️ **Other Recommended Hotels:**\n";
-      alternative_hotels.forEach((h) => {
-        output += `🏨 ${h.name} — ${h.rating}⭐ — ${h.price}\n`;
-        if (h.image) output += `![${h.name}](${h.image})\n`;
-        output += `[Book Now 🏷️](#book-${h.name.replace(/\s+/g, "-")})\n\n`;
       });
     }
 
     if (total_estimated_cost)
-      output += `💵 **Total Estimated Cost:** ${total_estimated_cost}\n`;
+      output += `💵 Total Estimated Cost: ${total_estimated_cost}\n`;
+
+    if (alternative_hotels?.length) output += "\n🏕️ Other Recommended Hotels:\n";
 
     return output;
   };
@@ -158,7 +201,6 @@ export default function ChatWindow() {
         {messages.map((m, i) => (
           <div key={i}>
             <MessageBubble {...m} />
-            {/* Render hotel cards if data exists */}
             {m.hotels?.itinerary?.map((day, idx) =>
               day.hotel ? (
                 <div
@@ -210,12 +252,12 @@ export default function ChatWindow() {
         {loading && <Loader />}
       </div>
 
-      {/* Input box */}
+      {/* Input box + Voice Button */}
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Try: Plan a trip from Mangalore to Goa with 10000 budget..."
+          placeholder="🎙️ Speak or type your query..."
           style={{
             flex: 1,
             padding: "10px 12px",
@@ -224,6 +266,21 @@ export default function ChatWindow() {
           }}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />
+
+        <button
+          onClick={toggleListening}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: isListening ? "#dc2626" : "#22c55e",
+            color: "#fff",
+            fontWeight: 600,
+            border: 0,
+          }}
+        >
+          {isListening ? "🛑 Stop" : "🎙️ Speak"}
+        </button>
+
         <button
           onClick={send}
           style={{
