@@ -10,7 +10,7 @@ export const chat = async (req, res) => {
     const { message } = req.body;
     res.json({
       reply:
-        "👋 Hi! I’m your AI travel assistant ✈️\nI can help plan trips, find attractions, hotels, or create full itineraries.\n\nTry:\n➡️ Plan a 3-day trip to Goa\n➡️ Plan a trip from Mangalore to Ooty with 10000 budget",
+        "👋 Hi! I’m your AI travel assistant ✈️\nI can help plan trips, find attractions, hotels, or create full itineraries.",
     });
   } catch (err) {
     console.error("Chat Error:", err);
@@ -19,34 +19,35 @@ export const chat = async (req, res) => {
 };
 
 /**
- * 🧠 Intelligent Travel Query Parser (Groq-powered)
- * Extracts structured trip data from any phrasing.
+ * 🧠 Intelligent Travel Query Parser (AI-powered)
+ * Extracts structured trip data from any phrasing, including dates.
  */
 async function parseTravelQuery(message) {
   const prompt = `
 You are a professional travel assistant AI.
 
-Your job: Extract structured trip details from the following message.
+Extract structured trip details from this user message:
+"${message}"
 
-Message: "${message}"
-
-Return only valid JSON with these fields:
+Return valid JSON with the following fields:
 {
   "source": "",
   "destination": "",
   "durationDays": "",
   "budget": "",
-  "interests": []
+  "interests": [],
+  "startDate": "",
+  "endDate": ""
 }
 
 Rules:
-- If the user says "trip from X to Y", fill both source and destination.
-- If only one city is mentioned, assume it's the destination.
-- If the user says "3-day", extract durationDays = 3.
-- Convert "10k" or "15k" to numbers (e.g. 10000, 15000).
-- If budget not mentioned, leave it empty.
-- If interests like "beach", "temple", "mountain" are mentioned, include them in "interests".
-Return JSON only — no text or comments.
+- Detect start and end dates if mentioned (e.g., "from March 10 to March 15").
+- If only one date is given and duration is mentioned, calculate endDate accordingly.
+- If dates are given, calculate "durationDays" automatically.
+- If "3-day" or "5 days" is said, extract durationDays.
+- Include interests like "beach", "adventure", "culture", etc.
+- Convert shorthand budgets like "10k" to full number 10000.
+- Return ONLY JSON, no text or markdown.
 `;
 
   const aiResponse = await chatWithAI(prompt);
@@ -56,7 +57,7 @@ Return JSON only — no text or comments.
 }
 
 /**
- * 🧭 Smart Trip Planner — AI + Real Attractions + Hotels
+ * 🧭 Smart Trip Planner — AI + Real Attractions + Hotels + Dates + Travel Days
  */
 export const chatItinerary = async (req, res) => {
   try {
@@ -66,34 +67,51 @@ export const chatItinerary = async (req, res) => {
       durationDays = 3,
       budget = 0,
       interests = [],
-      message, // 🧠 optional raw message from user
+      message,
+      startDate,
+      endDate,
     } = req.body;
 
-    // 🧠 If no destination, try to extract details using Groq AI
-    if (!destination && message) {
-      console.log("🧠 Parsing travel query using Groq...");
+    // 🧠 Use AI if no destination or date provided
+    if ((!destination || !startDate) && message) {
+      console.log("🧠 Parsing travel query using AI...");
       const parsed = await parseTravelQuery(message);
       source = parsed.source || source;
-      destination = parsed.destination;
+      destination = parsed.destination || destination;
       durationDays = parsed.durationDays || durationDays;
       budget = parsed.budget || budget;
-      interests = parsed.interests || [];
+      interests = parsed.interests || interests;
+      startDate = parsed.startDate || startDate;
+      endDate = parsed.endDate || endDate;
     }
 
     if (!destination) {
       return res.status(400).json({ error: "Destination is required." });
     }
 
+    // 🗓️ Calculate duration if start and end dates exist
+    if (startDate && endDate && !durationDays) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      durationDays = Math.max(1, Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1);
+    }
+
+    // 🎯 Add realistic travel days
+    const travelDays = durationDays > 3 ? 2 : 1;
+    const sightseeingDays = Math.max(1, durationDays - travelDays);
+
     const isSourceProvided =
       source &&
       source !== "your location" &&
       source.trim().toLowerCase() !== destination.trim().toLowerCase();
 
-    console.log(`📍 Generating itinerary for ${destination} (${source || "local"})`);
+    console.log(
+      `🗺️ Planning ${durationDays}-day trip ${isSourceProvided ? `from ${source} to ${destination}` : `in ${destination}`}`
+    );
 
     // 🌍 Step 1: Get attractions
     const geo = await getCityCoordinates(destination);
-    const attractions = await getTouristAttractions(geo.lat, geo.lon, 10000, 10);
+    const attractions = await getTouristAttractions(geo.lat, geo.lon, 15000, 12);
 
     const attractionList = attractions.length
       ? attractions
@@ -109,35 +127,42 @@ export const chatItinerary = async (req, res) => {
 You are an expert AI travel planner.
 
 Plan a ${durationDays}-day trip ${
-      isSourceProvided ? `from ${source} to ${destination}` : `within ${destination}`
+      isSourceProvided ? `from ${source} to ${destination}` : `in ${destination}`
     }.
 
-If no source city is provided, assume it's a *local sightseeing trip inside ${destination}* — do NOT write "${destination} → ${destination}" or invent another source.
+Trip details:
+- Start date: ${startDate || "not specified"}
+- End date: ${endDate || "not specified"}
+- Total days: ${durationDays}
+- Travel days: ${travelDays}
+- Sightseeing days: ${sightseeingDays}
+${budget > 0 ? `- Stay within ₹${budget} total budget.` : ""}
+- User interests: ${interests.length ? interests.join(", ") : "general travel"}
 
-${budget > 0 ? `Stay within ₹${budget} total budget.` : ""}
-User interests: ${interests.length ? interests.join(", ") : "general travel"}.
+Consider:
+- First day: traveling to destination
+- Last day: return journey
+- Remaining days: sightseeing, exploring attractions, and relaxing.
+- Suggest 2–3 alternate hotels.
+- Include image URLs, ratings, and estimated daily costs.
 
 Here are verified attractions near ${destination}:
 ${attractionList}
 
-Include:
-- A short summary (e.g., "3-day beach and culture trip in Goa")
-- For each day: activities, nearby attractions, and a hotel
-- If places are close, use same hotel
-- Each hotel must include: name, image (royalty-free link), price, rating, and location
-- Suggest 2–3 other recommended hotels (with images, price, rating)
-- Use proper JSON, no text or markdown
-
 Return valid JSON only:
 {
   "summary": "",
+  "source": "${source}",
   "destination": "${destination}",
-  "budget": ${budget},
+  "startDate": "${startDate || ""}",
+  "endDate": "${endDate || ""}",
   "durationDays": ${durationDays},
+  "budget": ${budget},
   "estimated_transport": "₹...",
   "itinerary": [
     {
       "day": 1,
+      "date": "",
       "plan": ["Activity 1", "Activity 2"],
       "hotel": {
         "name": "",
@@ -163,7 +188,7 @@ Return valid JSON only:
 
     const raw = await chatWithAI(prompt);
 
-    // 🧩 Step 3: Parse clean JSON safely
+    // 🧩 Step 3: Parse JSON safely
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON found in AI response");
 
@@ -182,7 +207,8 @@ Return valid JSON only:
 
     // 🧭 Step 4: Attach real attractions
     jsonData.real_attractions = attractions;
-    if (!isSourceProvided) delete jsonData.source;
+    jsonData.travelDays = travelDays;
+    jsonData.sightseeingDays = sightseeingDays;
 
     res.json(jsonData);
   } catch (e) {
@@ -190,3 +216,5 @@ Return valid JSON only:
     res.status(500).json({ error: e.message || "Could not generate itinerary" });
   }
 };
+
+

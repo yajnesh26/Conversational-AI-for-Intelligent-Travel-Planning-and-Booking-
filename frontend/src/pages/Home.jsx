@@ -9,7 +9,7 @@ export default function Home() {
   const [selected, setSelected] = useState(null);
   const navigate = useNavigate();
 
-  // 🧠 Mock data for now (can connect APIs later)
+  // Mock data for now (can connect APIs later)
   const data = {
     Hotels: [
       { title: "Ocean View Resort", subtitle: "Goa", price: 4500, image: "https://th.bing.com/th/id/OIP.Tod1hzpiXu5JVekBxeWtbAHaFj?o=7rm=3&rs=1&pid=ImgDetMain&o=7&rm=3", description: "Seaside resort with pool and breakfast." },

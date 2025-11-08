@@ -5,28 +5,29 @@ import { chat, chatItinerary } from "../services/api.js";
 
 export default function ChatWindow() {
   const [messages, setMessages] = useState([
-    {
-      from: "bot",
-      text: "👋 Hi! I’m your AI travel planner.\nYou can say:\n- 'Plan a 3-day trip to Goa'\n- 'Plan a trip from Mangalore to Goa with 10000 budget'",
-    },
+    { from: "bot", text: "👋 Hi! I’m your AI travel planner. Ask me to plan your next adventure!" },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [tripData, setTripData] = useState(null);
+  const [showEdit, setShowEdit] = useState(false);
+
+  // For edit modal
+  const [editValues, setEditValues] = useState({
+    source: "",
+    destination: "",
+    durationDays: 3,
+  });
 
   const recognitionRef = useRef(null);
-
-  // Booking state
-  const [showBooking, setShowBooking] = useState(false);
-  const [selectedHotel, setSelectedHotel] = useState(null);
-  const [rooms, setRooms] = useState(1);
 
   // 🎙️ Initialize Speech Recognition
   useEffect(() => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.warn("Speech Recognition not supported in this browser.");
+      console.warn("Speech Recognition not supported.");
       return;
     }
 
@@ -52,15 +53,11 @@ export default function ChatWindow() {
       alert("Your browser doesn't support voice input.");
       return;
     }
-    if (isListening) {
-      recognitionRef.current.stop();
-    } else {
-      recognitionRef.current.start();
-    }
+    if (isListening) recognitionRef.current.stop();
+    else recognitionRef.current.start();
     setIsListening(!isListening);
   };
 
-  // 🔊 Speak function (Text-to-Speech)
   const speakText = (text) => {
     if (!window.speechSynthesis) return;
     const utterance = new SpeechSynthesisUtterance(text);
@@ -70,7 +67,7 @@ export default function ChatWindow() {
     window.speechSynthesis.speak(utterance);
   };
 
-  // 🧠 Handle Send Message
+  // 🧠 Send message logic
   const send = async () => {
     if (!input.trim()) return;
     const text = input.trim();
@@ -80,7 +77,7 @@ export default function ChatWindow() {
 
     try {
       const tripMatchFull = text.match(
-        /trip\s+from\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\s+with\s+(\d+)\s*(?:rs|rupees|budget|inr)?)?$/i
+        /trip\s+from\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\s+for\s+(\d+)\s*(?:days|day)?)?/i
       );
       const tripMatchSimple = text.match(/(\d+)\s*-?\s*day.*trip.*to\s+([A-Za-z\s]+)/i);
       const isTripRequest = /plan|itinerary|trip/i.test(text);
@@ -88,33 +85,42 @@ export default function ChatWindow() {
       let payload = null;
 
       if (tripMatchFull || tripMatchSimple || isTripRequest) {
+        let source = "";
+        let destination = "";
+        let durationDays = 3;
+
         if (tripMatchFull) {
-          const source = tripMatchFull[1].trim();
-          const destination = tripMatchFull[2].trim();
-          const budget = tripMatchFull[3] ? parseInt(tripMatchFull[3]) : 0;
-          const cleanDestination = destination
-            .replace(/\b(with|under|budget|rs|inr)\b.*$/i, "")
-            .trim();
-          payload = { source, destination: cleanDestination, budget };
+          source = tripMatchFull[1].trim();
+          destination = tripMatchFull[2].trim();
+          durationDays = tripMatchFull[3] ? parseInt(tripMatchFull[3]) : 3;
         } else if (tripMatchSimple) {
-          const durationDays = parseInt(tripMatchSimple[1]);
-          const destination = tripMatchSimple[2].trim();
-          const cleanDestination = destination
-            .replace(/\b(with|under|budget|rs|inr)\b.*$/i, "")
-            .trim();
-          payload = { destination: cleanDestination, durationDays, interests: [] };
+          durationDays = parseInt(tripMatchSimple[1]);
+          destination = tripMatchSimple[2].trim();
         } else {
-          const destination = text.match(/to\s+([A-Za-z\s]+)/i)?.[1] || "Goa";
-          const cleanDestination = destination
-            .replace(/\b(with|under|budget|rs|inr)\b.*$/i, "")
-            .trim();
-          payload = { destination: cleanDestination, durationDays: 3 };
+          const destinationMatch = text.match(/to\s+([A-Za-z\s]+)/i);
+          destination = destinationMatch ? destinationMatch[1].trim() : "Goa";
         }
 
+        // ✅ Subtract 2 days for travel if trip > 3 days
+        const travelDays = durationDays > 3 ? 2 : 1;
+        const sightseeingDays = Math.max(1, durationDays - travelDays);
+
+        payload = { source, destination, durationDays, sightseeingDays };
+
         const data = await chatItinerary(payload);
-        const formatted = formatItinerary(data);
-        setMessages((m) => [...m, { from: "bot", text: formatted, hotels: data }]);
-        speakText(`Here’s your trip plan to ${payload.destination}`);
+
+        // Add travel days in UI display
+        const enhancedData = {
+          ...data,
+          source,
+          destination,
+          durationDays,
+          travelDays,
+        };
+
+        setTripData(enhancedData);
+        setEditValues({ source, destination, durationDays });
+        speakText(`Here’s your ${durationDays}-day trip plan from ${source || "your city"} to ${destination}`);
       } else {
         const { reply } = await chat(text);
         setMessages((m) => [...m, { from: "bot", text: reply }]);
@@ -124,180 +130,207 @@ export default function ChatWindow() {
       console.error("Chat error:", e);
       setMessages((m) => [
         ...m,
-        { from: "bot", text: "⚠️ Oops! Something went wrong while planning your trip." },
+        { from: "bot", text: "⚠️ Something went wrong while planning your trip." },
       ]);
-      speakText("Oops, something went wrong while planning your trip.");
     } finally {
       setLoading(false);
     }
   };
 
-  // ✨ Format Trip Itinerary
-  const formatItinerary = (data) => {
-    if (!data) return "⚠️ No itinerary available.";
-
-    const {
-      source,
-      destination,
-      summary,
-      durationDays,
-      budget,
-      itinerary,
-      alternative_hotels,
-      total_estimated_cost,
-    } = data;
-
-    let output = `🗺️ ${source ? `${source} → ` : ""}${destination} Trip Plan\n\n`;
-    if (summary) output += `✨ ${summary}\n\n`;
-    if (durationDays) output += `📅 Duration: ${durationDays} days\n`;
-    if (budget && budget > 0) output += `💰 Budget: ₹${budget}\n\n`;
-
-    if (itinerary?.length) {
-      itinerary.forEach((day) => {
-        output += `📅 Day ${day.day}:\n`;
-        (day.plan || []).forEach((a) => (output += `   • ${a}\n`));
-        if (day.hotel) {
-          output += `🏨 Hotel: ${day.hotel.name} (${day.hotel.rating}⭐)\n💰 ${day.hotel.price}\n\n`;
-        }
-      });
+  // ✏️ Handle Plan Edit
+  const updateTrip = async () => {
+    const { source, destination, durationDays } = editValues;
+    setShowEdit(false);
+    setLoading(true);
+    try {
+      const payload = { source, destination, durationDays };
+      const data = await chatItinerary(payload);
+      const enhancedData = {
+        ...data,
+        source,
+        destination,
+        durationDays,
+      };
+      setTripData(enhancedData);
+    } catch (err) {
+      console.error("Error updating trip:", err);
+    } finally {
+      setLoading(false);
     }
-
-    if (total_estimated_cost)
-      output += `💵 Total Estimated Cost: ${total_estimated_cost}\n`;
-
-    if (alternative_hotels?.length) output += "\n🏕️ Other Recommended Hotels:\n";
-
-    return output;
-  };
-
-  // 🏨 Booking Popup Logic
-  const handleBook = (hotel) => {
-    setSelectedHotel(hotel);
-    setRooms(1);
-    setShowBooking(true);
-  };
-
-  const handlePayment = () => {
-    alert(
-      `✅ Booking confirmed for ${rooms} room(s) at ${selectedHotel.name}.\n💰 Total: ${
-        parseInt(selectedHotel.price.replace(/\D/g, "")) * rooms
-      }`
-    );
-    setShowBooking(false);
   };
 
   return (
-    <div
-      style={{
-        maxWidth: 800,
-        margin: "24px auto",
-        border: "1px solid #e5e7eb",
-        borderRadius: 12,
-        padding: 16,
-        position: "relative",
-      }}
-    >
-      <div style={{ minHeight: 420, whiteSpace: "pre-wrap" }}>
-        {messages.map((m, i) => (
-          <div key={i}>
-            <MessageBubble {...m} />
-            {m.hotels?.itinerary?.map((day, idx) =>
-              day.hotel ? (
+    <div style={{ display: "flex", height: "100vh", background: "#f1f5f9" }}>
+      {/* 💬 Chatbot Section (Left) */}
+      <div
+        style={{
+          width: "30%",
+          background: "#ffffff",
+          borderRight: "2px solid #e2e8f0",
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: "12px",
+          margin: "20px",
+          boxShadow: "0 0 10px rgba(0,0,0,0.1)",
+        }}
+      >
+        <div style={{ padding: "16px", overflowY: "auto", flexGrow: 1 }}>
+          {messages.map((m, i) => (
+            <MessageBubble key={i} {...m} />
+          ))}
+          {loading && <Loader />}
+        </div>
+
+        {/* 🎙️ Input area */}
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "10px",
+            borderTop: "1px solid #e2e8f0",
+            background: "#f8fafc",
+          }}
+        >
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type or speak..."
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid #cbd5e1",
+            }}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+          />
+          <button
+            onClick={toggleListening}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: isListening ? "#dc2626" : "#22c55e",
+              color: "#fff",
+              border: "none",
+              fontWeight: 600,
+            }}
+          >
+            {isListening ? "🔇" : "🎙️"}
+          </button>
+          <button
+            onClick={send}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: "#2563eb",
+              color: "#fff",
+              border: "none",
+              fontWeight: 600,
+            }}
+          >
+            ➤
+          </button>
+        </div>
+      </div>
+
+      {/* 🌍 Trip Plan Section (Right) */}
+      <div
+        style={{
+          flex: 1,
+          padding: "24px",
+          background: "linear-gradient(135deg, #dbeafe, #fef3c7)",
+          overflowY: "auto",
+        }}
+      >
+        {!tripData ? (
+          <div
+            style={{
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#475569",
+              fontSize: "1.1rem",
+            }}
+          >
+            💬 Start chatting to generate your personalized trip plan!
+          </div>
+        ) : (
+          <>
+            <div style={{ textAlign: "center", marginBottom: "20px" }}>
+              <h2 style={{ color: "#1e3a8a" }}>
+                🗺️ {tripData.source ? `${tripData.source} → ` : ""}{tripData.destination} Trip Plan ({tripData.durationDays} Days)
+              </h2>
+              <button
+                onClick={() => setShowEdit(true)}
+                style={{
+                  marginTop: "10px",
+                  background: "#2563eb",
+                  color: "#fff",
+                  border: "none",
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                }}
+              >
+                ✏️ Change Plan
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: "20px",
+              }}
+            >
+              {tripData.itinerary?.map((day) => (
                 <div
-                  key={idx}
+                  key={day.day}
                   style={{
-                    background: "#f9fafb",
-                    borderRadius: 10,
-                    padding: 10,
-                    margin: "8px 0",
-                    boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+                    background: "#fff",
+                    borderRadius: "12px",
+                    padding: "16px",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
                   }}
                 >
-                  <h4>🏨 {day.hotel.name}</h4>
-                  <p>
-                    💰 {day.hotel.price} | ⭐ {day.hotel.rating} | 📍{" "}
-                    {day.hotel.location}
-                  </p>
-                  {day.hotel.image && (
-                    <img
-                      src={day.hotel.image}
-                      alt={day.hotel.name}
-                      style={{
-                        width: "100%",
-                        maxHeight: "200px",
-                        objectFit: "cover",
-                        borderRadius: 8,
-                        marginBottom: 8,
-                      }}
-                    />
+                  <h3 style={{ color: "#2563eb" }}>📅 Day {day.day}</h3>
+                  <ul style={{ marginTop: "10px", marginBottom: "10px" }}>
+                    {day.plan?.map((p, i) => (
+                      <li key={i}>
+                        • {typeof p === "string" ? p : p.name ? `${p.name} — ${p.description || ""}` : JSON.stringify(p)}
+                      </li>
+                    ))}
+                  </ul>
+
+                  {day.hotel && (
+                    <div>
+                      <p>🏨 <strong>{day.hotel.name}</strong> ({day.hotel.rating}⭐)</p>
+                      <p>💰 {day.hotel.price}</p>
+                      <button
+                        onClick={() => window.open("https://www.booking.com", "_blank")}
+                        style={{
+                          marginTop: "10px",
+                          background: "#2563eb",
+                          color: "white",
+                          border: "none",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Book Now
+                      </button>
+                    </div>
                   )}
-                  <button
-                    onClick={() => handleBook(day.hotel)}
-                    style={{
-                      padding: "6px 14px",
-                      background: "#2563eb",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Book Now
-                  </button>
                 </div>
-              ) : null
-            )}
-          </div>
-        ))}
-        {loading && <Loader />}
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Input box + Voice Button */}
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="🎙️ Speak or type your query..."
-          style={{
-            flex: 1,
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid #cbd5e1",
-          }}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-        />
-
-        <button
-          onClick={toggleListening}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 8,
-            background: isListening ? "#dc2626" : "#22c55e",
-            color: "#fff",
-            fontWeight: 600,
-            border: 0,
-          }}
-        >
-          {isListening ? "🛑 Stop" : "🎙️ Speak"}
-        </button>
-
-        <button
-          onClick={send}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 8,
-            border: 0,
-            background: "#2563eb",
-            color: "#fff",
-            fontWeight: 600,
-          }}
-        >
-          Send
-        </button>
-      </div>
-
-      {/* 🏨 Booking Modal */}
-      {showBooking && selectedHotel && (
+      {/* ✏️ Edit Plan Modal */}
+      {showEdit && (
         <div
           style={{
             position: "fixed",
@@ -309,7 +342,7 @@ export default function ChatWindow() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 50,
+            zIndex: 100,
           }}
         >
           <div
@@ -323,65 +356,64 @@ export default function ChatWindow() {
               boxShadow: "0 5px 15px rgba(0,0,0,0.3)",
             }}
           >
-            <h3>Book {selectedHotel.name}</h3>
-            <img
-              src={selectedHotel.image}
-              alt={selectedHotel.name}
-              style={{
-                width: "100%",
-                borderRadius: 8,
-                marginBottom: 12,
-              }}
+            <h3>✏️ Edit Trip Plan</h3>
+            <label>Source:</label>
+            <input
+              value={editValues.source}
+              onChange={(e) => setEditValues({ ...editValues, source: e.target.value })}
+              style={{ width: "100%", marginBottom: 10, padding: 6 }}
             />
-            <p>
-              {selectedHotel.price} | ⭐ {selectedHotel.rating}
-            </p>
-            <div style={{ marginBottom: 10 }}>
-              <label>Number of rooms: </label>
-              <input
-                type="number"
-                min="1"
-                value={rooms}
-                onChange={(e) => setRooms(e.target.value)}
+            <label>Destination:</label>
+            <input
+              value={editValues.destination}
+              onChange={(e) => setEditValues({ ...editValues, destination: e.target.value })}
+              style={{ width: "100%", marginBottom: 10, padding: 6 }}
+            />
+            <label>Days:</label>
+            <input
+              type="number"
+              min="1"
+              value={editValues.durationDays}
+              onChange={(e) =>
+                setEditValues({ ...editValues, durationDays: parseInt(e.target.value) })
+              }
+              style={{ width: "100%", marginBottom: 10, padding: 6 }}
+            />
+            <div>
+              <button
+                onClick={updateTrip}
                 style={{
-                  width: "60px",
-                  marginLeft: 6,
-                  padding: 4,
-                  borderRadius: 6,
-                  border: "1px solid #ccc",
+                  background: "#2563eb",
+                  color: "white",
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  border: "none",
+                  marginRight: 8,
+                  cursor: "pointer",
                 }}
-              />
+              >
+                Update
+              </button>
+              <button
+                onClick={() => setShowEdit(false)}
+                style={{
+                  background: "#ef4444",
+                  color: "white",
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
             </div>
-            <button
-              onClick={handlePayment}
-              style={{
-                padding: "10px 16px",
-                background: "#16a34a",
-                color: "white",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-                marginRight: 8,
-              }}
-            >
-              Proceed to Pay
-            </button>
-            <button
-              onClick={() => setShowBooking(false)}
-              style={{
-                padding: "10px 16px",
-                background: "#ef4444",
-                color: "white",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-              }}
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}
     </div>
   );
 }
+
+
+
